@@ -43,7 +43,7 @@ Three priorities emerge directly from the data:
 
 **2. Activate star products for customer acquisition** — the loyal customer base (57% repeat buyers) is proof of product-market fit. The four revenue-leading SKUs should anchor paid social and marketing campaigns to bring in new buyers.
 
-**3. Build supply chain resilience** — 15+ product categories across global markets at 300% growth creates a highly complex supplier network. Without a unified data model, this becomes an operational risk.
+**3. Build supply chain resilience** — 20+ product categories across global markets at 300% growth creates a highly complex supplier network. Without a unified data model, this becomes an operational risk.
 
 All three require the same foundation: integrated, trusted data from PostgreSQL and Stripe.
 
@@ -68,6 +68,19 @@ novafinds-data-platform/
     ├── README.md                          ← Architecture & migration rationale
     ├── NovaFinds_Lakeflow_Pipeline.py     ← Bronze → Silver → Gold DLT pipeline
     └── NovaFinds_Pipeline_Monitoring.py   ← Monitoring & alerting notebook
+novafinds-data-platform/          ← already on main ✓
+├── README.md                     ← already uploaded ✓
+├── task1-stripe-integration/
+│   ├── README.md
+│   └── simple_stripe_loader.py
+├── task2-gold-layer/
+│   ├── README.md
+│   └── task2_postgresql_pipeline.py   ← the runnable local version
+│   └──gold_layer_business analysis.ipynb  ← the (Kimball Gold layer) full analysis with charts
+└── task3-data-platform/
+    ├── README.md
+    ├── NovaFinds_Lakeflow_Pipeline.py
+    └── NovaFinds_Pipeline_Monitoring.py
 ```
 
 ---
