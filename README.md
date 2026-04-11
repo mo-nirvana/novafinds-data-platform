@@ -61,8 +61,9 @@ novafinds-data-platform/
 │   └── simple_stripe_loader.py            ← Stripe → PostgreSQL pipeline
 │
 ├── task2-gold-layer/
-│   ├── README.md                          ← Dimensional model design
-│   └── gold_layer_business analysis.ipynb ← Kimball Gold layer notebook
+│   ├── README.md                        ← this updated file
+│   ├── task2_postgresql_pipeline.py     ← the runnable local version (new)
+│   └── task2_databricks_business_analytics.ipynb                      ← Kimball Gold layer notebook
 │
 └── task3-data-platform/
     ├── README.md                          ← Architecture & migration rationale
