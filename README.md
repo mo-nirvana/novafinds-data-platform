@@ -68,19 +68,6 @@ novafinds-data-platform/
     ├── README.md                          ← Architecture & migration rationale
     ├── NovaFinds_Lakeflow_Pipeline.py     ← Bronze → Silver → Gold DLT pipeline
     └── NovaFinds_Pipeline_Monitoring.py   ← Monitoring & alerting notebook
-novafinds-data-platform/          ← already on main ✓
-├── README.md                     ← already uploaded ✓
-├── task1-stripe-integration/
-│   ├── README.md
-│   └── simple_stripe_loader.py
-├── task2-gold-layer/
-│   ├── README.md
-│   └── task2_postgresql_pipeline.py   ← the runnable local version
-│   └──gold_layer_business analysis.ipynb  ← the (Kimball Gold layer) full analysis with charts
-└── task3-data-platform/
-    ├── README.md
-    ├── NovaFinds_Lakeflow_Pipeline.py
-    └── NovaFinds_Pipeline_Monitoring.py
 ```
 
 ---
