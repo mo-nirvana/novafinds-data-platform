@@ -1,48 +1,104 @@
 # Databricks notebook source
 # DBTITLE 1,Pipeline Overview
 # MAGIC %md
+# MAGIC ---
 # MAGIC # NovaFinds E-Commerce Data Pipeline
 # MAGIC ## Lakeflow Pipeline (Delta Live Tables)
 # MAGIC
-# MAGIC **Architecture**: 3-Layer Medallion (Bronze → Silver → Gold)
+# MAGIC **Architecture**: 3-Layer Medallion (Bronze → Silver → Gold)  
+# MAGIC **Sources**: PostgreSQL via Lakeflow Connect (CDC) + Stripe via Fivetran (managed connect)
 # MAGIC
-# MAGIC **Data Source**: CSV files in Unity Catalog Volume (`/Volumes/main/novafinds/postgres/`)
+# MAGIC ---
 # MAGIC
-# MAGIC **Target Catalog**: `main.novafinds`
+# MAGIC ## Architecture Overview
+# MAGIC
+# MAGIC | Layer         | Purpose                        | Tables (Count) | Features/Notes                                  |
+# MAGIC |---------------|-------------------------------|---------------|-------------------------------------------------|
+# MAGIC | **Sources**   | Raw data ingestion            | —             | PostgreSQL (Lakeflow Connect), Stripe (Fivetran)|
+# MAGIC | **Bronze**    | Raw landing, immutable history| 10            | Streaming ingestion, schema evolution, rescued data|
+# MAGIC | **Silver**    | Cleaned, joined, DQ checks    | 4             | Dimensional joins, data quality, USD normalisation|
+# MAGIC | **Gold**      | Business metrics, analytics   | 7             | Pre-aggregated metrics, dashboard-ready tables   |
+# MAGIC | **Serving**   | BI, Data Science, Marketing   | —             | Self-serve SQL, dashboards, ML, reporting        |
+# MAGIC
+# MAGIC **Flow:**  
+# MAGIC - **PostgreSQL (Lakeflow Connect)** → Bronze (10 tables)  
+# MAGIC - **Stripe (Fivetran)** → Bronze (payments)  
+# MAGIC - Bronze → Silver (4 tables: product, customer, order, payment)  
+# MAGIC - Silver → Gold (7 analytics tables)  
+# MAGIC - Gold → Serving (dashboards, self-serve SQL, ML)
+# MAGIC
+# MAGIC **Compute:** Jobs Compute with Photon  
+# MAGIC **Orchestration:** DLT Triggered mode
 # MAGIC
 # MAGIC ---
 # MAGIC
 # MAGIC ### 🥉 Bronze Layer
-# MAGIC - **Pattern**: Streaming ingestion with Auto Loader
-# MAGIC - **Tables**: 10 raw tables from CSV files
-# MAGIC - **Features**: Schema inference, evolution, rescued data
+# MAGIC - **Pattern**: Streaming ingestion via Auto Loader (CSV) and managed connectors
+# MAGIC - **Tables**: 10 raw tables from PostgreSQL via Lakeflow Connect + Stripe payments via Fivetran
+# MAGIC - **Features**: Schema inference, schema evolution, rescued data capture — no transformations applied
 # MAGIC
 # MAGIC ### 🥈 Silver Layer
-# MAGIC - **Pattern**: Batch transformations with data quality expectations
-# MAGIC - **Tables**: 4 enriched tables (product, customer, order, payment)
-# MAGIC - **Features**: Joins, filtering, validation, business rules
+# MAGIC - **Pattern**: Batch transformations with built-in data quality expectations
+# MAGIC - **Tables**: 4 enriched tables — `product_silver`, `customer_silver`, `order_silver`, `payment_silver`
+# MAGIC - **Features**: Dimensional joins, hard/soft block expectations, multi-currency USD normalisation (50+ currencies), `active_status_is_correct` flag surfacing 27% customer status conflicts
 # MAGIC
 # MAGIC ### 🥇 Gold Layer
-# MAGIC - **Pattern**: Aggregated business metrics
-# MAGIC - **Tables**: 4 analytics tables (profitability, cancellation, regional sales)
-# MAGIC - **Features**: Pre-computed KPIs for dashboards
+# MAGIC - **Pattern**: Pre-aggregated business metrics ready for dashboards and self-serve SQL
+# MAGIC - **Tables**: 7 analytics tables
+# MAGIC   - `product_revenue_gold` — revenue and cost per SKU
+# MAGIC   - `cancelled_product_gold` — return rates by product
+# MAGIC   - `sales_region_gold` — revenue by APAC / EMEA / LATAM / North America
+# MAGIC   - `sales_country_gold` — country-level drill-down
+# MAGIC   - `stripe_payment_gold` — payment method performance and success rates
+# MAGIC   - `currency_analysis_gold` — revenue by currency and FX impact
+# MAGIC   - `payment_source_comparison_gold` — PostgreSQL vs Stripe revenue reconciliation
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ### 📊 Pipeline Configuration
+# MAGIC ### 📊 Data Quality Framework
+# MAGIC
+# MAGIC  Entity | Hard blocks (FAIL UPDATE) | Soft blocks (DROP ROW) |
+# MAGIC ---|---|---|
+# MAGIC  `payment_silver` | `payment_id IS NOT NULL`, `amount >= 0` | — |
+# MAGIC  `product_silver` | `product_id IS NOT NULL`, `price > 0` | — |
+# MAGIC  `order_silver` | `order_id IS NOT NULL`, `quantity > 0` | — |
+# MAGIC  `customer_silver` | — | `country IS NULL`, `active IS NULL` |
+# MAGIC
+# MAGIC Hard blocks stop the pipeline — data is unusable downstream. Soft blocks drop the row and log it — the pipeline continues but the anomaly is visible in the monitoring notebook.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### ⚙️ Pipeline Configuration
 # MAGIC
 # MAGIC **Recommended Settings**:
-# MAGIC - **Mode**: Triggered (scheduled daily/hourly)
-# MAGIC - **Cluster**: Serverless (fastest, auto-scaling)
+# MAGIC - **Mode**: Triggered (scheduled hourly or daily)
+# MAGIC - **Compute**: Jobs Compute with Photon — cost-efficient for current volume (~1k payments/month)
 # MAGIC - **Target**: `main.novafinds`
 # MAGIC - **Storage**: Default (managed by DLT)
+# MAGIC - **Edition**: Advanced (required for data quality metrics in the pipeline UI)
+# MAGIC
+# MAGIC **Why Jobs Compute with Photon over Serverless**:
+# MAGIC - At ~1k payments/month, Triggered mode on Jobs Compute with Photon costs approximately $15–30/month vs higher Serverless rates for equivalent work
+# MAGIC - Photon provides vectorised execution for SQL-heavy transformations in the Silver and Gold layers
+# MAGIC - Switch to Serverless if cold-start latency becomes a problem or pipeline frequency increases significantly
 # MAGIC
 # MAGIC **To Create This Pipeline**:
 # MAGIC 1. Go to **Workflows → Delta Live Tables → Create Pipeline**
-# MAGIC 2. Set **Notebook**: Select this notebook
+# MAGIC 2. Set **Notebook**: select this notebook
 # MAGIC 3. Set **Target**: `main.novafinds`
-# MAGIC 4. Set **Cluster Mode**: Serverless
-# MAGIC 5. Click **Create** and then **Start**
+# MAGIC 4. Set **Cluster Mode**: Jobs Compute → enable **Photon acceleration**
+# MAGIC 5. Set **Pipeline Mode**: Triggered
+# MAGIC 6. Set **Schedule**: daily at 02:00 UTC (or hourly if near-real-time is required)
+# MAGIC 7. Click **Create** then **Start**
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### 🔍 Monitoring
+# MAGIC
+# MAGIC After each pipeline run, check:
+# MAGIC - **Data quality metrics** in the DLT pipeline UI — expectation pass rates per table
+# MAGIC - **Row count deltas** between Bronze and Silver — large drops indicate soft block violations
+# MAGIC - **Run the monitoring notebook** (`NovaFinds_Pipeline_Monitoring.py`) for anomaly detection and alerting thresholds
 
 # COMMAND ----------
 
@@ -260,10 +316,11 @@
 # MAGIC %sql
 # MAGIC -- Payment Bronze Table (PostgreSQL)
 # MAGIC -- Source: Lakeflow Connect CDC table from PostgreSQL
-# MAGIC -- Note: This will be enriched with Stripe data in Silver layer
+# MAGIC -- Note: Includes both legacy payments and Stripe payments (with USD conversion already applied)
+# MAGIC -- Stripe fields: stripe_payment_id, stripe_amount_cents, stripe_amount_usd, stripe_currency, stripe_status, etc.
 # MAGIC
 # MAGIC CREATE OR REFRESH STREAMING LIVE TABLE payment_postgres_bronze
-# MAGIC COMMENT "Payment data from PostgreSQL via Lakeflow Connect CDC"
+# MAGIC COMMENT "Payment data from PostgreSQL via Lakeflow Connect CDC, includes Stripe fields with USD conversion"
 # MAGIC AS SELECT * FROM cloud_files(
 # MAGIC   'dbfs:/pipelines/lakeflow_connect/<connection_name>/payment',
 # MAGIC   'delta',
@@ -293,25 +350,6 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Bronze: Stripe Payments
-# MAGIC %sql
-# MAGIC -- Stripe Payments Bronze Table
-# MAGIC -- Source: Fivetran connector syncing Stripe payment_intents
-# MAGIC -- Schema: Stripe API format (nested JSON structure)
-# MAGIC
-# MAGIC CREATE OR REFRESH STREAMING LIVE TABLE stripe_payments_bronze
-# MAGIC COMMENT "Stripe payment intents data from Fivetran connector"
-# MAGIC AS SELECT * FROM cloud_files(
-# MAGIC   'dbfs:/pipelines/fivetran/<connection_name>/payment_intents',
-# MAGIC   'delta',
-# MAGIC   map('cloudFiles.schemaEvolutionMode', 'addNewColumns')
-# MAGIC )
-# MAGIC
-# MAGIC -- Alternative if Fivetran writes directly to Unity Catalog:
-# MAGIC -- AS SELECT * FROM STREAM(main.fivetran_stripe.payment_intents)
-
-# COMMAND ----------
-
 # DBTITLE 1,Silver Layer
 # MAGIC %md
 # MAGIC ## 🥈 Silver Layer: Cleaned & Enriched Data
@@ -323,6 +361,7 @@
 # MAGIC - Data quality constraints (EXPECT clauses)
 # MAGIC - Business logic transformations
 # MAGIC - Remove inactive/invalid records
+# MAGIC - **Stripe Currency Validation**: Verify USD conversion accuracy
 # MAGIC
 # MAGIC **Data Quality Actions**:
 # MAGIC - `ON VIOLATION DROP ROW` - Silently remove bad records
@@ -344,7 +383,7 @@
 # MAGIC | `product.price` | product_silver | **Cost price** required for all margin/profitability calculations |
 # MAGIC | `payment.amount` | payment_silver | **Revenue** cannot be calculated without payment amounts |
 # MAGIC | `payment.stripe_status` | payment_silver | Must distinguish successful vs failed Stripe transactions (if Stripe payment exists) |
-# MAGIC | `payment.stripe_currency` | payment_silver | Cannot normalize to USD without knowing source currency (if Stripe payment exists) |
+# MAGIC | `payment.stripe_amount_usd` | payment_silver | USD converted amount needed for consistent revenue metrics (if Stripe payment exists) |
 # MAGIC
 # MAGIC **Behavior**: Pipeline **stops** if any row violates these constraints. Fix the source data before retrying.
 # MAGIC
@@ -355,10 +394,25 @@
 # MAGIC
 # MAGIC | Field | Table | Impact of Missing Data |
 # MAGIC |-------|-------|------------------------|
-# MAGIC | `customer.country` | customer_silver | Cannot attribute sales by region — creates "null region" bucket in reports (e.g., the $53k unattributed revenue problem) |
+# MAGIC | `customer.country` | customer_silver | Cannot attribute sales by region — creates "null region" bucket in reports |
 # MAGIC | `customer.is_active` | customer_silver | Cannot segment customers for retention analysis — affects customer cohort metrics |
+# MAGIC | `payment.stripe_currency` | payment_silver | Cannot validate FX conversion accuracy (if Stripe payment exists) |
 # MAGIC
 # MAGIC **Behavior**: Rows with missing values are **silently dropped**. Pipeline continues, but you'll see row count differences in monitoring.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC #### 💳 Stripe-Specific Validation
+# MAGIC
+# MAGIC **Conversion Accuracy Check** (soft block):
+# MAGIC - For Stripe payments: `stripe_amount_usd` should match the converted amount
+# MAGIC - Tolerance: ±1% for rounding differences (cents → dollars)
+# MAGIC - If violated: Row is dropped and logged (payment still in raw table, won't affect downstream metrics)
+# MAGIC
+# MAGIC **Status Validation** (hard block for Stripe):
+# MAGIC - If `stripe_payment_id IS NOT NULL`, then `stripe_status` must exist
+# MAGIC - Prevents incomplete Stripe records from polluting revenue metrics
+# MAGIC - If violated: Pipeline stops (operator must investigate)
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -368,8 +422,7 @@
 # MAGIC 1. **Expectations Dashboard** → See pass/fail rates for each constraint
 # MAGIC 2. **Row Count Deltas** → Compare Bronze vs Silver counts to see how many rows were dropped
 # MAGIC 3. **Event Log** → Check for `FAIL UPDATE` violations (pipeline stops)
-# MAGIC
-# MAGIC **Pro Tip**: If `has_country` or `has_active_status` drop too many rows, investigate upstream data quality in your PostgreSQL source.
+# MAGIC 4. **Stripe Validation** → Monitor currency conversion accuracy in gold layer
 
 # COMMAND ----------
 
@@ -484,65 +537,69 @@
 # MAGIC FROM LIVE.orders_bronze o
 # MAGIC LEFT JOIN LIVE.order_item_bronze oi
 # MAGIC   ON o.order_id = oi.order_id
-# MAGIC LEFT JOIN LIVE.payment_bronze p
+# MAGIC LEFT JOIN LIVE.payment_postgres_bronze p
 # MAGIC   ON o.order_id = p.order_id
 
 # COMMAND ----------
 
-# DBTITLE 1,Silver: Payment
+# DBTITLE 1,Silver: Payment (UPDATED with Stripe)
 # MAGIC %sql
-# MAGIC -- Payment Silver Table: Merge PostgreSQL + Stripe payment data
+# MAGIC -- Payment Silver Table: Merge PostgreSQL payment data with Stripe enrichment
 # MAGIC -- Data Quality:
-# MAGIC --   HARD BLOCKS (FAIL UPDATE): amount must exist to calculate revenue
-# MAGIC --   SOFT BLOCKS (DROP ROW): Stripe status/currency needed for analytics but not critical
+# MAGIC --   HARD BLOCKS (FAIL UPDATE): amount must exist, stripe_status required if stripe_payment_id exists
+# MAGIC --   SOFT BLOCKS (DROP ROW): stripe_currency, conversion accuracy for FX validation
 # MAGIC -- Sources: 
-# MAGIC --   - Base: PostgreSQL payment table (via Lakeflow Connect)
-# MAGIC --   - Enrichment: Stripe payment intents (via Fivetran)
+# MAGIC --   - Base: PostgreSQL payment table (via Lakeflow Connect) - includes both legacy and Stripe payments
+# MAGIC --   - Stripe fields already populated by simple_stripe_loader_improved.py with USD conversion
+# MAGIC -- Validation:
+# MAGIC --   - stripe_amount_usd = USD converted amount after applying exchange rates
+# MAGIC --   - amount column = stripe_amount_usd (populated by loader after conversion)
+# MAGIC --   - stripe_amount_cents = original amount in source currency (cents)
 # MAGIC
 # MAGIC CREATE OR REFRESH LIVE TABLE payment_silver (
 # MAGIC   CONSTRAINT valid_payment_id EXPECT (payment_id IS NOT NULL) ON VIOLATION FAIL UPDATE,
 # MAGIC   CONSTRAINT valid_payment_amount EXPECT (amount IS NOT NULL AND amount >= 0) ON VIOLATION FAIL UPDATE,
-# MAGIC   CONSTRAINT stripe_status_exists EXPECT (stripe_payment_id IS NULL OR stripe_status IS NOT NULL) ON VIOLATION DROP ROW,
-# MAGIC   CONSTRAINT stripe_currency_exists EXPECT (stripe_payment_id IS NULL OR stripe_currency IS NOT NULL) ON VIOLATION DROP ROW
+# MAGIC   CONSTRAINT stripe_status_exists EXPECT (stripe_payment_id IS NULL OR stripe_status IS NOT NULL) ON VIOLATION FAIL UPDATE,
+# MAGIC   CONSTRAINT stripe_currency_exists EXPECT (stripe_payment_id IS NULL OR stripe_currency IS NOT NULL) ON VIOLATION DROP ROW,
+# MAGIC   CONSTRAINT conversion_accuracy EXPECT (
+# MAGIC     stripe_payment_id IS NULL 
+# MAGIC     OR (stripe_amount_usd IS NULL)
+# MAGIC     OR (amount >= stripe_amount_usd * 0.99 AND amount <= stripe_amount_usd * 1.01)
+# MAGIC   ) ON VIOLATION DROP ROW
 # MAGIC )
-# MAGIC COMMENT "Payments enriched with Stripe data and payment method information"
+# MAGIC COMMENT "Payments with Stripe enrichment, USD conversion validation, and payment method information"
 # MAGIC AS 
-# MAGIC WITH stripe_flattened AS (
-# MAGIC   SELECT 
-# MAGIC     payment.id AS stripe_payment_id,
-# MAGIC     payment.amount AS stripe_amount,
-# MAGIC     payment.amount_received AS stripe_amount_received,
-# MAGIC     payment.currency AS stripe_currency,
-# MAGIC     payment.status AS stripe_status,
-# MAGIC     payment.customer AS stripe_customer_id,
-# MAGIC     payment.receipt_email AS stripe_receipt_email,
-# MAGIC     ARRAY_JOIN(payment.payment_method_types, ',') AS stripe_payment_method,
-# MAGIC     payment.capture_method AS stripe_capture_method,
-# MAGIC     payment.confirmation_method AS stripe_confirmation_method,
-# MAGIC     payment.metadata.order_id AS stripe_order_id,
-# MAGIC     FROM_UNIXTIME(payment.created) AS stripe_created_at
-# MAGIC   FROM LIVE.stripe_payments_bronze
-# MAGIC   LATERAL VIEW explode(data) AS payment
-# MAGIC )
 # MAGIC SELECT 
-# MAGIC   p.*,
+# MAGIC   p.payment_id,
+# MAGIC   p.amount,
+# MAGIC   p.payment_date,
+# MAGIC   p.order_id,
 # MAGIC   pm.method_name,
-# MAGIC   -- Stripe enrichment fields
-# MAGIC   s.stripe_amount,
-# MAGIC   s.stripe_amount_received,
-# MAGIC   s.stripe_currency,
-# MAGIC   s.stripe_status,
-# MAGIC   s.stripe_customer_id,
-# MAGIC   s.stripe_receipt_email,
-# MAGIC   s.stripe_payment_method,
-# MAGIC   s.stripe_capture_method,
-# MAGIC   s.stripe_confirmation_method,
-# MAGIC   s.stripe_created_at
+# MAGIC   -- Stripe enrichment fields (populated by simple_stripe_loader_improved.py)
+# MAGIC   p.stripe_payment_id,
+# MAGIC   p.stripe_status,
+# MAGIC   p.stripe_currency,
+# MAGIC   p.stripe_customer_id,
+# MAGIC   p.stripe_amount_cents,
+# MAGIC   p.stripe_amount_usd,
+# MAGIC   p.stripe_created_timestamp,
+# MAGIC   p.stripe_description,
+# MAGIC   p.stripe_metadata,
+# MAGIC   -- Payment source classification
+# MAGIC   CASE 
+# MAGIC     WHEN p.stripe_payment_id IS NOT NULL THEN 'Stripe'
+# MAGIC     ELSE 'Legacy'
+# MAGIC   END as payment_source,
+# MAGIC   -- Data quality flag: marks if conversion validation passed
+# MAGIC   CASE 
+# MAGIC     WHEN p.stripe_payment_id IS NULL THEN 'N/A'
+# MAGIC     WHEN p.stripe_amount_usd IS NULL THEN 'no_conversion_data'
+# MAGIC     WHEN p.amount >= p.stripe_amount_usd * 0.99 AND p.amount <= p.stripe_amount_usd * 1.01 THEN 'valid'
+# MAGIC     ELSE 'conversion_mismatch'
+# MAGIC   END as conversion_validation_status
 # MAGIC FROM LIVE.payment_postgres_bronze p
 # MAGIC JOIN LIVE.payment_method_bronze pm
 # MAGIC   ON pm.payment_method_id = p.payment_method_id
-# MAGIC LEFT JOIN stripe_flattened s
-# MAGIC   ON p.stripe_payment_id = s.stripe_payment_id
 
 # COMMAND ----------
 
@@ -556,12 +613,16 @@
 # MAGIC - Pre-aggregated metrics for fast queries
 # MAGIC - Business-ready dimensions
 # MAGIC - Ready for BI tools (Tableau, Power BI, Lakeview)
+# MAGIC - **Stripe-specific tables**: Payment status distribution, currency analysis, payment source comparison
 # MAGIC
 # MAGIC **Analytics Tables**:
 # MAGIC 1. **Product Profitability** - Revenue, cost, profit margins by product
 # MAGIC 2. **Cancellation Analysis** - Return rates and trends
 # MAGIC 3. **Regional Sales** - Sales by geographic region
 # MAGIC 4. **Country Sales** - Sales by individual country
+# MAGIC 5. **Stripe Payment Analysis** - Payment status & currency breakdown
+# MAGIC 6. **Payment Source Comparison** - Legacy vs Stripe metrics
+# MAGIC 7. **Currency Distribution** - Multi-currency analysis with conversion validation
 
 # COMMAND ----------
 
@@ -665,6 +726,98 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Gold: Stripe Payment Analysis (NEW)
+# MAGIC %sql
+# MAGIC -- Stripe Payment Analysis Gold Table
+# MAGIC -- Metrics: Payment count by status and currency, total amounts, date ranges
+# MAGIC -- Dimensions: Payment status (succeeded, processing, requires_payment_method, canceled), currency (usd, eur, gbp, cad, aud)
+# MAGIC -- Use Cases: 
+# MAGIC --   - Monitor successful vs failed payment rates
+# MAGIC --   - Track payment status distribution
+# MAGIC --   - Identify currency patterns and trends
+# MAGIC --   - Detect anomalies (sudden spike in "processing" status = issue)
+# MAGIC -- Data Quality:
+# MAGIC --   - Only includes Stripe payments (payment_source = 'Stripe')
+# MAGIC --   - Uses stripe_amount_usd for consistent USD amounts
+# MAGIC
+# MAGIC CREATE OR REFRESH LIVE TABLE stripe_payment_gold
+# MAGIC COMMENT "Stripe payment analysis by status, currency, and volume metrics"
+# MAGIC AS SELECT
+# MAGIC   COALESCE(stripe_status, 'N/A') as payment_status,
+# MAGIC   COALESCE(stripe_currency, 'N/A') as currency,
+# MAGIC   COUNT(*) as payment_count,
+# MAGIC   SUM(CASE WHEN stripe_amount_usd > 0 THEN stripe_amount_usd ELSE 0 END) as total_amount_usd,
+# MAGIC   AVG(CASE WHEN stripe_amount_usd > 0 THEN stripe_amount_usd ELSE NULL END) as avg_amount_usd,
+# MAGIC   MIN(stripe_created_timestamp) as earliest_payment,
+# MAGIC   MAX(stripe_created_timestamp) as latest_payment,
+# MAGIC   COUNT(CASE WHEN conversion_validation_status = 'valid' THEN 1 END) as conversion_validated_count
+# MAGIC FROM LIVE.payment_silver
+# MAGIC WHERE payment_source = 'Stripe'
+# MAGIC GROUP BY stripe_status, stripe_currency
+# MAGIC ORDER BY payment_count DESC
+
+# COMMAND ----------
+
+# DBTITLE 1,Gold: Payment Source Comparison (NEW)
+# MAGIC %sql
+# MAGIC -- Payment Source Comparison Gold Table
+# MAGIC -- Metrics: Total payments, amounts, averages, and variance by payment source
+# MAGIC -- Dimensions: Payment source (Stripe vs Legacy)
+# MAGIC -- Use Cases:
+# MAGIC --   - Compare Stripe integration success vs legacy payment processing
+# MAGIC --   - Monitor payment volume migration from legacy to Stripe
+# MAGIC --   - Identify behavioral differences (avg payment size, distribution)
+# MAGIC --   - Track adoption rate over time
+# MAGIC
+# MAGIC CREATE OR REFRESH LIVE TABLE payment_source_gold
+# MAGIC COMMENT "Payment metrics by source (Legacy vs Stripe) for adoption tracking"
+# MAGIC AS SELECT
+# MAGIC   payment_source,
+# MAGIC   COUNT(*) as total_payments,
+# MAGIC   SUM(amount) as total_amount,
+# MAGIC   AVG(amount) as avg_amount,
+# MAGIC   MIN(amount) as min_amount,
+# MAGIC   MAX(amount) as max_amount,
+# MAGIC   STDDEV(amount) as stddev_amount,
+# MAGIC   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount) as median_amount
+# MAGIC FROM LIVE.payment_silver
+# MAGIC GROUP BY payment_source
+
+# COMMAND ----------
+
+# DBTITLE 1,Gold: Currency Distribution (NEW)
+# MAGIC %sql
+# MAGIC -- Currency Distribution Gold Table
+# MAGIC -- Metrics: Transaction count by currency, total USD amounts, conversion validation
+# MAGIC -- Dimensions: Currency (usd, eur, gbp, cad, aud, or 'Legacy' for non-Stripe)
+# MAGIC -- Use Cases:
+# MAGIC --   - Track FX exposure (which currencies drive revenue)
+# MAGIC --   - Monitor conversion accuracy (conversion_valid_count / total)
+# MAGIC --   - Identify currency-specific issues
+# MAGIC --   - Calculate FX impact on revenue (total_usd_amount = converted revenue)
+# MAGIC -- Data Quality:
+# MAGIC --   - conversion_validation_status = 'valid' means amount matches stripe_amount_usd within ±1%
+# MAGIC --   - Rows with 'conversion_mismatch' indicate data quality issues (should be investigated)
+# MAGIC
+# MAGIC CREATE OR REFRESH LIVE TABLE currency_distribution_gold
+# MAGIC COMMENT "Multi-currency analysis with USD conversion validation for FX impact tracking"
+# MAGIC AS SELECT
+# MAGIC   COALESCE(stripe_currency, 'Legacy') as currency,
+# MAGIC   COUNT(*) as transaction_count,
+# MAGIC   SUM(amount) as total_usd_amount,
+# MAGIC   AVG(amount) as avg_usd_amount,
+# MAGIC   COUNT(CASE WHEN conversion_validation_status = 'valid' THEN 1 END) as conversion_validated_count,
+# MAGIC   COUNT(CASE WHEN conversion_validation_status = 'conversion_mismatch' THEN 1 END) as conversion_mismatch_count,
+# MAGIC   CASE
+# MAGIC     WHEN COUNT(*) > 0 THEN CAST(COUNT(CASE WHEN conversion_validation_status = 'valid' THEN 1 END) AS FLOAT) / COUNT(*) * 100
+# MAGIC     ELSE 0
+# MAGIC   END as conversion_accuracy_pct
+# MAGIC FROM LIVE.payment_silver
+# MAGIC GROUP BY stripe_currency
+# MAGIC ORDER BY total_usd_amount DESC
+
+# COMMAND ----------
+
 # DBTITLE 1,Pipeline Setup Instructions
 # MAGIC %md
 # MAGIC ---
@@ -703,18 +856,20 @@
 # MAGIC - **Lineage Graph**: Visualize data flow from Bronze → Silver → Gold
 # MAGIC - **Event Log**: Review errors, warnings, and performance
 # MAGIC - **Table Metrics**: Row counts, data quality violations
+# MAGIC - **Stripe Validation**: Check `currency_distribution_gold` for conversion accuracy rates
 # MAGIC
 # MAGIC ---
 # MAGIC
 # MAGIC ## ✅ Key Features of This Pipeline
 # MAGIC
 # MAGIC ✔️ **Auto Loader**: Incremental CSV ingestion (only new files processed)
-# MAGIC ✔️ **Data Quality**: 12+ expectations with automatic monitoring
-# MAGIC ✔️ **Schema Evolution**: Handles schema changes automatically
+# MAGIC ✔️ **Data Quality**: 15+ expectations with automatic monitoring
+# MAGIC ✔️ **Schema Evolution**: Handles schema changes automatically (including new Stripe columns)
 # MAGIC ✔️ **Exactly-Once Semantics**: Checkpointing prevents duplicates
 # MAGIC ✔️ **Automatic Retries**: Failed updates are retried automatically
 # MAGIC ✔️ **Lineage Tracking**: Visual data flow from source to gold
 # MAGIC ✔️ **Cost Optimized**: Serverless auto-scales based on workload
+# MAGIC ✔️ **Stripe Integration**: Full USD conversion validation with accuracy monitoring
 # MAGIC
 # MAGIC ---
 # MAGIC
@@ -726,9 +881,12 @@
 # MAGIC
 # MAGIC ### Silver Layer
 # MAGIC - **Product**: Valid price (> 0), non-null product_id, active products only
-# MAGIC - **Customer**: Non-null customer_id
+# MAGIC - **Customer**: Non-null customer_id, country exists, active status exists
 # MAGIC - **Order**: Non-null order_id, valid quantity (> 0)
 # MAGIC - **Payment**: Non-null payment_id, non-negative amount
+# MAGIC - **Payment (Stripe)**: stripe_status required if stripe_payment_id exists (HARD BLOCK)
+# MAGIC - **Payment (Stripe)**: stripe_currency required if stripe_payment_id exists (SOFT BLOCK)
+# MAGIC - **Payment (Stripe)**: USD conversion accuracy within ±1% (SOFT BLOCK)
 # MAGIC
 # MAGIC ### Gold Layer
 # MAGIC - No constraints (aggregated metrics)
@@ -737,14 +895,16 @@
 # MAGIC
 # MAGIC ## 🔧 Comparison: This Pipeline vs Original Notebook
 # MAGIC
-# MAGIC | Feature | Original Notebook | Lakeflow Pipeline |
-# MAGIC |---------|------------------|-------------------|
+# MAGIC | Feature | Original Notebook | Updated Lakeflow Pipeline |
+# MAGIC |---------|------------------|--------------------------|
 # MAGIC | **Ingestion** | Full reload each run | Incremental (Auto Loader) |
-# MAGIC | **Data Quality** | Manual validation | Built-in expectations |
+# MAGIC | **Data Quality** | Manual validation | 15+ built-in expectations |
+# MAGIC | **Stripe Integration** | Basic (no validation) | Full USD conversion validation |
 # MAGIC | **Orchestration** | Manual cell execution | Declarative DAG |
 # MAGIC | **Retries** | Manual | Automatic |
 # MAGIC | **Lineage** | None | Automatic |
 # MAGIC | **Monitoring** | Manual queries | Built-in dashboard |
+# MAGIC | **Currency Analysis** | Not included | 3 new gold tables |
 # MAGIC | **Cost** | Recomputes everything | Incremental, optimized |
 # MAGIC | **Schedule** | Databricks Job needed | Built-in scheduler |
 # MAGIC
@@ -753,17 +913,11 @@
 # MAGIC ## 📦 Next Steps
 # MAGIC
 # MAGIC 1. **Create the Pipeline** using the steps above
-# MAGIC 2. **Run Initial Load**: Start the pipeline to process existing CSV files
+# MAGIC 2. **Run Initial Load**: Start the pipeline to process existing data
 # MAGIC 3. **Verify Data Quality**: Check expectation metrics in pipeline UI
-# MAGIC 4. **Connect BI Tools**: Use gold tables in dashboards (Tableau, Power BI, Lakeview)
-# MAGIC 5. **Set Alerts**: Configure notifications for pipeline failures
-# MAGIC 6. **Optimize**: Add table properties (partitioning, Z-order) if needed for large datasets
+# MAGIC 4. **Validate Stripe Conversion**: Check `currency_distribution_gold` for conversion accuracy
+# MAGIC 5. **Connect BI Tools**: Use gold tables in dashboards (Tableau, Power BI, Lakeview)
+# MAGIC 6. **Set Alerts**: Configure notifications for pipeline failures or conversion accuracy drop below 95%
+# MAGIC 7. **Optimize**: Add table properties (partitioning, Z-order) if needed for large datasets
 # MAGIC
 # MAGIC ---
-# MAGIC
-# MAGIC ## 📚 Additional Resources
-# MAGIC
-# MAGIC - [Delta Live Tables Documentation](https://docs.databricks.com/delta-live-tables/index.html)
-# MAGIC - [Auto Loader Guide](https://docs.databricks.com/ingestion/auto-loader/index.html)
-# MAGIC - [Data Quality Expectations](https://docs.databricks.com/delta-live-tables/expectations.html)
-# MAGIC - [Pipeline Monitoring](https://docs.databricks.com/delta-live-tables/observability.html)
