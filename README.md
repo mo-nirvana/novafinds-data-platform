@@ -57,13 +57,13 @@ novafinds-data-platform/
 ├── README.md                              ← You are here
 │
 ├── task1-stripe-integration/
-│   ├── README.md                          ← Design decisions, how to run
+│   ├── README.md                          ← Design logic and how to run simple_stripe_loader.py
 │   └── simple_stripe_loader.py            ← Stripe → PostgreSQL pipeline
 │
 ├── task2-gold-layer/
-│   ├── README.md                        ← this updated file
-│   ├── task2_postgresql_pipeline.py     ← the runnable local version (new)
-│   └── task2_databricks_business_analytics.ipynb                      ← Kimball Gold layer notebook
+│   ├── README.md                        ← analysis using gold layer logic, answer to the questions, and how to run the .py or .ipynb below
+│   ├── task2_postgresql_pipeline.py     ← the runnable local version on Docker
+│   └── task2_databricks_business_analytics.ipynb                      ← Kimball Gold layer notebook originally ran on Databricks, includes some analysis results (charts and graphs)
 │
 └── task3-data-platform/
     ├── README.md                          ← Architecture & migration rationale
