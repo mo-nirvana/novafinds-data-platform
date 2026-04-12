@@ -11,7 +11,7 @@ This task ships two versions of the same analytical model, which you can choose 
 | File | Environment | What it does |
 |---|---|---|
 | `task2_postgresql_pipeline.py` | Local PostgreSQL (Docker) | Runs directly after Task 1 — extends `simple_stripe_loader.py` by building Silver and Gold tables in the same database |
-| `task2.ipynb` | Databricks / Jupyter | Full analysis notebook with exploratory charts, currency normalisation, and visualisations of the results |
+| `task2_databricks_business_analytics.ipynb` | Databricks / Jupyter | Full analysis notebook with exploratory charts, currency normalisation, and visualisations of the results |
 
 Both produce the same four Gold tables. The notebook version goes further analytically — it includes the multi-currency USD conversion, data quality exploration, and the visualisations used in the business analysis (regional sales map, product profitability charts, customer order frequency distribution).
 
@@ -44,7 +44,7 @@ GOLD LAYER    → 4 new tables: product_revenue_gold, cancelled_product_gold,
 
 ### Option B — Databricks / Jupyter Notebook
 
-Upload `task2.ipynb` to a Databricks workspace with the Silver layer tables available in `main.novafinds`, attach to a Serverless cluster, and run all cells. The notebook includes additional steps not in the Python script — see differences below.
+Upload `task2_databricks_business_analytics.ipynb` to a Databricks workspace with the Silver layer tables available in `main.novafinds`, attach to a Serverless cluster, and run all cells. The notebook includes additional steps not in the Python script — see differences below.
 
 ---
 
