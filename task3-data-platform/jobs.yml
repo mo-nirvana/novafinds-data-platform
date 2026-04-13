@@ -1,0 +1,89 @@
+# Databricks Jobs - NovaFinds CI/CD Pipeline
+# Orchestrates: Unit Tests → Lakeflow Pipeline → Data Visualization
+
+resources:
+  jobs:
+    # Standalone unit tests job (can run independently)
+    novafinds_unit_tests:
+      name: "novafinds_unit_tests_${bundle.target}"
+      
+      tasks:
+        - task_key: run_unit_tests
+          notebook_task:
+            notebook_path: ./tests/unit/test_runner.py
+            base_parameters:
+              catalog: ${var.catalog_name}
+              environment: ${bundle.target}
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: i3.xlarge
+            num_workers: 1
+            spark_conf:
+              spark.databricks.cluster.profile: serverless
+              spark.databricks.repl.allowedLanguages: python,sql
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      
+      tags:
+        project: novafinds
+        layer: testing
+        environment: ${bundle.target}
+    
+    # Main integration pipeline job
+    # Architecture: Unit Tests → Lakeflow Pipeline → Data Visualization
+    novafinds_integration_pipeline:
+      name: "novafinds_integration_pipeline_${bundle.target}"
+      
+      tasks:
+        # Task 1: Run unit tests first
+        - task_key: unit_tests
+          notebook_task:
+            notebook_path: ./tests/unit/test_runner.py
+            base_parameters:
+              catalog: ${var.catalog_name}
+              environment: ${bundle.target}
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: i3.xlarge
+            num_workers: 1
+        
+        # Task 2: Run Lakeflow Declarative Pipeline with Expectations
+        - task_key: lakeflow_pipeline
+          depends_on:
+            - task_key: unit_tests
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.novafinds_lakeflow_pipeline.id}
+            full_refresh: false
+        
+        # Task 3: Generate data visualizations (deliverable)
+        - task_key: data_visualization
+          depends_on:
+            - task_key: lakeflow_pipeline
+          notebook_task:
+            notebook_path: ./src/novafinds/visualization_dashboard.py
+            base_parameters:
+              catalog: ${var.catalog_name}
+              target_schema: "${var.catalog_name}_dlt"
+              environment: ${bundle.target}
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: i3.xlarge
+            num_workers: 2
+            spark_conf:
+              spark.databricks.delta.preview.enabled: "true"
+      
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      
+      # Email notifications for failures
+      email_notifications:
+        on_failure:
+          - myxmonica@gmail.com
+        on_success:
+          - myxmonica@gmail.com
+      
+      tags:
+        project: novafinds
+        layer: integration
+        environment: ${bundle.target}

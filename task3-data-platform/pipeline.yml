@@ -1,0 +1,46 @@
+# Lakeflow Declarative Pipeline (Delta Live Tables)
+# NovaFinds E-Commerce Medallion Architecture
+
+resources:
+  pipelines:
+    novafinds_lakeflow_pipeline:
+      name: "novafinds_lakeflow_pipeline_${bundle.target}"
+      
+      # Pipeline configuration
+      catalog: ${var.catalog_name}
+      target: "${var.catalog_name}_dlt"
+      
+      # Notebook libraries
+      libraries:
+        - notebook:
+            path: ./src/novafinds/pipeline_notebook.py
+      
+      # Cluster configuration
+      clusters:
+        - label: default
+          autoscale:
+            min_workers: 1
+            max_workers: 5
+          node_type_id: i3.xlarge
+          
+      # Pipeline mode and settings
+      continuous: false
+      development: ${bundle.target == 'dev'}
+      photon: ${bundle.target == 'prod' || bundle.target == 'stage'}
+      edition: ADVANCED  # Required for data quality metrics
+      channel: CURRENT
+      
+      # Configuration passed to the pipeline notebook
+      configuration:
+        data_source: ${var.data_source_path}
+        catalog: ${var.catalog_name}
+        environment: ${bundle.target}
+      
+      # Notifications
+      notifications:
+        - alerts:
+            - on-update-failure
+            - on-update-fatal-failure
+            - on-flow-failure
+          email_recipients:
+            - myxmonica@gmail.com
