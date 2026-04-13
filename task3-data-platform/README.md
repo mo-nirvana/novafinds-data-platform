@@ -1,22 +1,23 @@
 # Task 3 — Enterprise Data Platform
 
-**Objective:** Transition NovaFinds from ad-hoc local scripts to a scalable, governed data platform that can support both real-time business operations and advanced data science.
+**Objective:** Transition NovaFinds from ad-hoc local scripts to a scalable, governed data platform — deployable via CI/CD using a Databricks Asset Bundle.
 
 ---
 
-## The Starting Point
+## Repository Structure
 
-When this engagement begins, NovaFinds' data infrastructure looks like this:
-
-- A single PostgreSQL database with no orchestration
-- Local Python scripts run manually on individual machines
-- Every department builds its own pipelines from the same source tables
-- No data quality checks, no lineage, no alerting
-- Dashboards go stale silently when pipelines fail
-- 27.34% of customers have conflicting status records — no single source of truth
-- Finance and Marketing are almost certainly reporting different revenue numbers
-
-This is not a technical failure — it is what reasonable startup infrastructure looks like. The problem is that 300% transaction growth and international expansion have made it fragile.
+```
+novafinds-pipeline-dabs/
+├── databricks.yml                        ← Bundle config: dev / stage / prod targets
+├── resources/
+│   ├── pipeline.yml                      ← Lakeflow DLT pipeline definition
+│   └── jobs.yml                          ← Orchestration: tests → pipeline → viz
+├── src/novafinds/
+│   ├── pipeline_notebook.py              ← Bronze → Silver → Gold medallion logic
+│   └── visualization_dashboard.py        ← Post-pipeline analytics output
+└── tests/unit/
+    └── test_runner.py                    ← Unit tests run before every deployment
+```
 
 ---
 
@@ -29,34 +30,57 @@ This is not a technical failure — it is what reasonable startup infrastructure
 ├──────────────┬─────────────────────────────────────┬───────────────┤
 │   SOURCES    │           MEDALLION LAYERS           │   SERVING     │
 ├──────────────┼──────────┬──────────┬───────────────┼───────────────┤
-│              │          │          │               │               │
 │ PostgreSQL   │  BRONZE  │  SILVER  │     GOLD      │ BI Dashboards │
-│ (Lakeflow    │──────────│──────────│───────────────│ Self-serve SQL│
-│  Connect)  ──►  Raw     │  Cleaned │  Business     │ Data Science  │
-│              │  landing │  joined  │  metrics      │ Marketing     │
-│ Stripe       │  10 tbls │  4 tbls  │  7 tbls       │               │
-│ (Fivetran) ──►  Immut.  │  DQ      │  KPIs         │               │
-│              │  history │  checks  │  USD norm.    │               │
+│ (Lakeflow    ├──────────┤──────────┤───────────────┤ Self-serve SQL│
+│  Connect)  ──► Raw      │ Cleaned  │ Business      │ Data Science  │
+│              │ landing  │ joined   │ metrics       │ Marketing     │
+│ Stripe       │ 10 tbls  │ 4 tbls   │ 7 tbls        │               │
+│ (Fivetran) ──► Immut.   │ DQ       │ KPIs +        │               │
+│              │ history  │ checks   │ USD norm.     │               │
 └──────────────┴──────────┴──────────┴───────────────┴───────────────┘
-
-Compute: Jobs Compute with Photon  │  Orchestration: DLT Triggered mode
+Compute: Jobs Compute with Photon (prod)  │  Orchestration: DLT Triggered
 ```
 
-### Ingestion — Managed Connectors
+### Why Databricks Asset Bundle (DAB)?
 
-Rather than writing and maintaining custom ingestion code, two managed connectors handle source data:
+The original approach was a standalone Databricks notebook deployed manually. Replacing it with a DAB brings the pipeline into a proper software development lifecycle:
 
-**Lakeflow Connect** — connects to PostgreSQL with Change Data Capture (CDC). Detects inserts, updates, and deletes at the row level and propagates them incrementally. No full reloads, no manual scheduling.
+| Without DAB | With DAB |
+|---|---|
+| Manual notebook deployment | `databricks bundle deploy -t prod` |
+| No environment separation | Isolated dev / stage / prod catalogs |
+| No automated tests before deploy | Unit tests gate every deployment |
+| Config changes require UI edits | Everything version-controlled in YAML |
+| No CI/CD integration | GitHub Actions: PR → dev, merge → stage, tag → prod |
 
-**Fivetran (Stripe connector)** — syncs Stripe payment data automatically. At approximately $120/month for the Starter tier at current volume (~1k payments/month), significantly cheaper than the engineering time required to maintain a custom Stripe integration.
+---
 
-### Transformation — Lakeflow Pipelines (Delta Live Tables)
+## CI/CD Workflow
 
-Transformations follow the medallion architecture across three layers:
+```
+Pull Request  →  validate + deploy dev  →  run unit tests
+Merge to main →  deploy staging         →  run integration tests
+Release tag   →  deploy production      →  scheduled daily at 02:00 UTC
+```
 
-**Bronze** — raw data as it arrives from connectors. No transformations, no filters. Immutable historical record — if something goes wrong downstream, you can always reprocess from here.
+Each environment uses an isolated Unity Catalog:
+- `novafinds_dev` — small fixture dataset, rapid iteration
+- `novafinds_stage` — full dataset, pre-production validation
+- `novafinds_prod` — live data, Photon enabled, email alerts on failure
 
-**Silver** — cleaned, joined, and validated data. This is where data quality expectations are enforced:
+### Job Orchestration
+
+Each deployment runs a three-task job in sequence:
+
+```
+unit_tests → lakeflow_pipeline → data_visualization
+```
+
+If unit tests fail, the pipeline does not run. If the pipeline fails, visualisation does not run. Failures at any stage trigger email notification.
+
+---
+
+## Data Quality Framework
 
 | Entity | Hard blocks (FAIL UPDATE) | Soft blocks (DROP ROW) |
 |---|---|---|
@@ -65,11 +89,11 @@ Transformations follow the medallion architecture across three layers:
 | `order_silver` | `order_id IS NOT NULL`, `quantity > 0` | — |
 | `customer_silver` | — | `country IS NULL`, `active IS NULL` |
 
-Hard blocks stop the pipeline — the data is unusable and proceeding would corrupt downstream metrics. Soft blocks drop the offending row and log it — the pipeline continues but the anomaly is recorded and visible in the monitoring dashboard.
+Hard blocks stop the pipeline loudly. Soft blocks drop the row and log it — visible in the DLT pipeline UI and the monitoring notebook.
 
-Silver also applies multi-currency normalisation across 50+ currencies, converting `total_amount` to `unified_amount` in USD using static FX rates. This is the step that makes cross-regional revenue figures comparable.
+---
 
-**Gold** — 7 pre-aggregated tables ready for dashboards and self-serve SQL:
+## Gold Layer Tables
 
 | Table | Purpose |
 |---|---|
@@ -81,15 +105,62 @@ Silver also applies multi-currency normalisation across 50+ currencies, converti
 | `currency_analysis_gold` | Revenue by currency and FX impact |
 | `payment_source_comparison_gold` | PostgreSQL vs Stripe revenue reconciliation |
 
-### Compute — Jobs Compute with Photon
+---
 
-The pipeline runs on **Jobs Compute with Photon** rather than Serverless. At current volume (~1k payments/month) in Triggered mode, this costs approximately $15–30/month for compute vs higher Serverless rates for equivalent work. Photon provides vectorised execution that benefits the SQL-heavy Silver and Gold transformations. Switch to Serverless if cold-start latency becomes a constraint or pipeline frequency increases significantly.
+## Quickstart
 
-**Estimated total monthly cost: $145–170**
-- Lakeflow Connect (PostgreSQL CDC): $5–10
-- Jobs Compute with Photon: $15–30
-- Storage (Unity Catalog): $5–10
-- Fivetran Starter (Stripe): $120
+**Prerequisites:** Databricks CLI installed, workspace URL and token configured.
+
+```bash
+# 1. Authenticate
+databricks configure
+
+# 2. Validate
+databricks bundle validate -t dev
+
+# 3. Deploy to dev
+databricks bundle deploy -t dev
+
+# 4. Run full pipeline (tests → pipeline → visualisation)
+databricks bundle run novafinds_integration_pipeline -t dev
+
+# 5. Promote to staging
+databricks bundle deploy -t stage
+databricks bundle run novafinds_integration_pipeline -t stage
+
+# 6. Deploy to production (runs on schedule after this)
+databricks bundle deploy -t prod
+```
+
+See `QUICKSTART.md` for full setup including catalog creation and sample data upload. See `CICD.md` for GitHub Actions configuration.
+
+---
+
+## Estimated Monthly Cost (Production)
+
+| Component | Cost |
+|---|---|
+| Lakeflow Connect (PostgreSQL CDC) | $5–10 |
+| Jobs Compute with Photon | $15–30 |
+| Storage (Unity Catalog) | $5–10 |
+| Fivetran Starter (Stripe) | $120 |
+| **Total** | **$145–170/month** |
+
+---
+
+## How Task 1 Evolves Here
+
+| Dimension | Task 1 | Task 3 |
+|---|---|---|
+| Deployment | Run manually | `databricks bundle deploy` |
+| Environments | Single local DB | dev / stage / prod isolation |
+| Testing | None | Unit tests gate every deploy |
+| Stripe ingestion | Local JSON file | Fivetran, automatic sync |
+| Data quality | None | 12+ DLT expectations |
+| Alerting | `print()` | Email on failure, DLT event log |
+| Version control | Script file | Full bundle in Git |
+
+
 
 ### Governance — Unity Catalog
 
@@ -144,52 +215,3 @@ The `NovaFinds_Pipeline_Monitoring.py` notebook runs hourly (10 minutes after th
 Each phase delivers standalone value before the next begins. Realistic for a team of 1–2 FTE.
 
 ---
-
-## How Task 1 Evolves in This Environment
-
-The `simple_stripe_loader.py` from Task 1 and the Lakeflow Pipeline in this task solve the same problem at different levels of maturity:
-
-| Dimension | Task 1 | Task 3 |
-|---|---|---|
-| **Ingestion** | Local JSON file | Fivetran Starter connector, automatic sync |
-| **Field mapping** | Explicit Python | Declarative SQL in Silver layer |
-| **Schema evolution** | `ALTER TABLE ADD COLUMN` per run | Unity Catalog governed, automatic |
-| **Idempotency** | Application-level check + UNIQUE constraint | DLT exactly-once semantics via checkpointing |
-| **Data quality** | None | 12+ EXPECT constraints with hard/soft blocks |
-| **Logging** | `print()` statements | Observable pipeline event log |
-| **Alerting** | None | Slack, Email, PagerDuty |
-| **Orchestration** | Run manually | Scheduled, automatically retried |
-| **Lineage** | None | Unity Catalog column-level lineage |
-| **Monthly cost** | Free (local) | ~$145–170/month |
-
-The business logic is the same. The infrastructure is production-grade.
-
----
-
-## How to Deploy
-
-**Prerequisites:** A Databricks workspace with Unity Catalog enabled, a Lakeflow Connect PostgreSQL connection, and a Fivetran Stripe connector configured.
-
-```
-1. Upload NovaFinds_Lakeflow_Pipeline.py to your Databricks workspace
-
-2. Create the DLT pipeline:
-   Workflows → Delta Live Tables → Create Pipeline
-   - Pipeline name: NovaFinds E-Commerce Pipeline
-   - Product edition: Advanced
-   - Notebook: select this file
-   - Target: main.novafinds
-   - Cluster mode: Jobs Compute → enable Photon acceleration
-   - Pipeline mode: Triggered
-
-3. Update source paths in Bronze layer cells to match your
-   Lakeflow Connect and Fivetran catalog/schema names
-
-4. Start the pipeline and verify data quality metrics in the UI
-
-5. Schedule the monitoring notebook:
-   - Frequency: hourly, 10 minutes after pipeline runs
-   - Update pipeline_id in Cell 2 with your pipeline ID
-```
-
-**Finding your pipeline ID:** Open your DLT pipeline in the Databricks UI and copy the ID from the URL: `.../delta-live-tables/pipelines/YOUR-ID-HERE`
