@@ -1,0 +1,107 @@
+# Databricks Asset Bundle Configuration
+# NovaFinds E-Commerce Data Pipeline - CI/CD Project
+
+bundle:
+  name: novafinds-pipeline
+  
+include:
+  - resources/*.yml
+
+variables:
+  catalog_name:
+    description: Unity Catalog name for the environment
+  data_source_path:
+    description: Path to source data files
+  pipeline_mode:
+    description: Pipeline execution mode (triggered or continuous)
+    default: triggered
+
+workspace:
+  host: ${workspace.host}
+
+targets:
+  # Development Environment - Small static subset for rapid iteration
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog_name: novafinds_dev
+      data_source_path: /Volumes/novafinds_dev/raw/fixtures
+      pipeline_mode: triggered
+    resources:
+      pipelines:
+        novafinds_lakeflow_pipeline:
+          catalog: ${var.catalog_name}
+          target: ${var.catalog_name}_dlt
+          configuration:
+            data_source: ${var.data_source_path}
+      jobs:
+        novafinds_unit_tests:
+          tags:
+            environment: dev
+        novafinds_integration_pipeline:
+          tags:
+            environment: dev
+  
+  # Staging Environment - Larger subset for comprehensive testing
+  stage:
+    mode: production
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog_name: novafinds_stage
+      data_source_path: /Volumes/novafinds_stage/raw/data
+      pipeline_mode: triggered
+    resources:
+      pipelines:
+        novafinds_lakeflow_pipeline:
+          catalog: ${var.catalog_name}
+          target: ${var.catalog_name}_dlt
+          configuration:
+            data_source: ${var.data_source_path}
+          development: false
+      jobs:
+        novafinds_unit_tests:
+          tags:
+            environment: stage
+        novafinds_integration_pipeline:
+          tags:
+            environment: stage
+          schedule:
+            quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+            timezone_id: UTC
+  
+  # Production Environment - Full live data
+  prod:
+    mode: production
+    workspace:
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog_name: novafinds_prod
+      data_source_path: /Volumes/novafinds_prod/raw/data
+      pipeline_mode: triggered
+    resources:
+      pipelines:
+        novafinds_lakeflow_pipeline:
+          catalog: ${var.catalog_name}
+          target: ${var.catalog_name}_dlt
+          configuration:
+            data_source: ${var.data_source_path}
+          development: false
+          photon: true
+          channel: CURRENT
+      jobs:
+        novafinds_unit_tests:
+          tags:
+            environment: prod
+        novafinds_integration_pipeline:
+          tags:
+            environment: prod
+          schedule:
+            quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+            timezone_id: UTC
+          email_notifications:
+            on_failure:
+              - myxmonica@gmail.com
