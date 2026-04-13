@@ -68,24 +68,30 @@ novafinds-data-platform/
 └── task3-data-platform/
     ├── README.md                          ← Architecture & migration rationale
     ├── NovaFinds_Lakeflow_Pipeline.py     ← Bronze → Silver → Gold DLT pipeline
-    └── NovaFinds_Pipeline_Monitoring.py   ← Monitoring & alerting notebook
+    ├── NovaFinds_Pipeline_Monitoring.py   ← Monitoring & alerting notebook
+    └── novafinds-pipeline-dabs
+       ├── databricks.yml                     ← DAB bundle config
+       ├── resources/
+       │   ├── pipeline.yml                   ← Lakeflow DLT definition
+       │   └── jobs.yml                       ← CI/CD job orchestration
+       ├── src/novafinds/
+       │   ├── pipeline_notebook.py           ← Medallion pipeline logic
+       │   └── visualization_dashboard.py
+       └── tests/unit/
+          └── test_runner.py
 ```
 
----
+## Task Overview
 
-## Solution Overview
-
-| Task | What it does | Technology |
-|------|-------------|------------|
-| **Task 1** | Ingest Stripe payment data into the existing PostgreSQL `payment` table without breaking legacy dashboards | Python, psycopg2, JSONB schema evolution |
-| **Task 2** | Design a Gold layer analytical model optimised for product profitability, returns, and regional sales queries | Kimball dimensional modelling, SQL |
-| **Task 3** | Architect and implement a scalable enterprise data platform | Databricks, Delta Live Tables, Lakeflow Connect, Fivetran, Unity Catalog |
+| Task | What it does | Key technology |
+|---|---|---|
+| **Task 1** | Ingest Stripe into the existing `payment` table without breaking dashboards | Python, psycopg2, JSONB schema evolution |
+| **Task 2** | Gold layer analytical model for product, cancellation, and regional analysis | Kimball dimensional modelling, SQL |
+| **Task 3** | Enterprise platform with CI/CD deployment across dev / stage / prod | Databricks Asset Bundle, DLT, Lakeflow, Unity Catalog |
 
 ---
 
-## Local Setup (Task 1)
-
-Task 1 runs against a local PostgreSQL instance provisioned via Docker.
+## Local Setup (Task 1 + 2)
 
 **Prerequisites:** Docker, Python 3.8+
 
@@ -93,20 +99,34 @@ Task 1 runs against a local PostgreSQL instance provisioned via Docker.
 # Start the database
 docker compose up -d
 
-# Install dependencies
-pip install psycopg2-binary
+pip install psycopg2-binary pandas
 
-# Run the Stripe ingestion
+# Task 1 — ingest Stripe payments
 cd task1-stripe-integration
 python simple_stripe_loader.py
+
+# Task 2 — build Silver + Gold layers
+cd ../task2-gold-layer
+python task2_postgresql_pipeline.py
 ```
 
-The Docker container exposes PostgreSQL on port `5431`. Connection details are preconfigured in `simple_stripe_loader.py`.
+## Platform Setup (Task 3)
+
+**Prerequisites:** Databricks CLI, workspace access
+
+```bash
+cd task3-data-platform
+databricks bundle validate -t dev
+databricks bundle deploy -t dev
+databricks bundle run novafinds_integration_pipeline -t dev
+```
+
+See `task3-data-platform/QUICKSTART.md` for full setup, and `CICD.md` for GitHub Actions configuration.
 
 ---
 
-## The Bigger Picture
+## The Thread Connecting All Three Tasks
 
-Task 1 solves an immediate integration problem. Task 3 shows how that same integration should look inside an enterprise platform — the `simple_stripe_loader.py` script becomes a managed Lakeflow/Fivetran source, the manual column additions become governed schema evolution in Unity Catalog, and the print-statement logging becomes observable pipeline metrics with Slack/PagerDuty alerting.
+Task 1 solves an immediate problem — connect Stripe to PostgreSQL without disrupting reporting. Task 2 builds the analytical layer that makes the data useful. Task 3 shows what both of those look like inside a production-grade, version-controlled, CI/CD-deployed platform.
 
-The thread connecting all three tasks is the same argument: **NovaFinds has the data to grow significantly, but cannot act on it until the infrastructure catches up.**
+The `simple_stripe_loader.py` from Task 1 becomes a Fivetran-managed source in Task 3. The Gold tables from Task 2 become DLT-declared, quality-checked, lineage-tracked outputs in Task 3. The same logic — at a different level of engineering maturity.
