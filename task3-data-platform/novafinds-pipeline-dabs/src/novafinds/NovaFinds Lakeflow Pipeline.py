@@ -381,6 +381,7 @@
 # MAGIC | Field | Table | Why Critical |
 # MAGIC |-------|-------|-------------|
 # MAGIC | `product.price` | product_silver | **Cost price** required for all margin/profitability calculations |
+# MAGIC | `product.sell_price` | product_silver | **Sell price** required for all margin/profitability calculations |
 # MAGIC | `payment.amount` | payment_silver | **Revenue** cannot be calculated without payment amounts |
 # MAGIC | `payment.stripe_status` | payment_silver | Must distinguish successful vs failed Stripe transactions (if Stripe payment exists) |
 # MAGIC | `payment.stripe_amount_usd` | payment_silver | USD converted amount needed for consistent revenue metrics (if Stripe payment exists) |
@@ -429,12 +430,13 @@
 # DBTITLE 1,Silver: Product
 # MAGIC %sql
 # MAGIC -- Product Silver Table: Enriched with category and brand
-# MAGIC -- Data Quality: Valid prices, non-null IDs, active products only
+# MAGIC -- Data Quality: Valid prices (cost and sell), non-null IDs, active products only
 # MAGIC -- Critical: price (cost_price) must exist to calculate margins
 # MAGIC
 # MAGIC CREATE OR REFRESH LIVE TABLE product_silver (
 # MAGIC   CONSTRAINT valid_product_id EXPECT (product_id IS NOT NULL) ON VIOLATION FAIL UPDATE,
 # MAGIC   CONSTRAINT valid_cost_price EXPECT (price IS NOT NULL AND price > 0) ON VIOLATION FAIL UPDATE,
+# MAGIC   CONSTRAINT valid_sell_price EXPECT (sell_price IS NOT NULL AND sell_price > 0) ON VIOLATION FAIL UPDATE,
 # MAGIC   CONSTRAINT active_products_only EXPECT (is_active = true)
 # MAGIC )
 # MAGIC COMMENT "Cleaned products with category and brand information"
@@ -644,9 +646,9 @@
 # MAGIC   SUM(o.unified_amount) AS total_payment_amount,
 # MAGIC   SUM(o.quantity) AS total_quantity,
 # MAGIC   (p.price * SUM(o.quantity)) AS total_cost,
-# MAGIC   (SUM(o.unified_amount) - (p.price * SUM(o.quantity))) AS total_profit,
-# MAGIC   (SUM(o.unified_amount) - (p.price * SUM(o.quantity))) / SUM(o.quantity) AS unit_profit,
-# MAGIC   (SUM(o.unified_amount) - (p.price * SUM(o.quantity))) / SUM(o.unified_amount) AS profit_margin
+# MAGIC   (p.sell_price * SUM(o.quantity)) - (p.price * SUM(o.quantity))) AS total_profit,
+# MAGIC   (p.sell_price * SUM(o.quantity)) - (p.price * SUM(o.quantity)))  / SUM(o.quantity) AS unit_profit,
+# MAGIC   (p.sell_price * SUM(o.quantity)) - (p.price * SUM(o.quantity)))  / SUM(p.sell_price * SUM(o.quantity)) AS profit_margin
 # MAGIC FROM LIVE.product_silver p
 # MAGIC JOIN LIVE.order_silver o
 # MAGIC   ON p.product_id = o.product_id
