@@ -74,7 +74,7 @@ The PostgreSQL `order_silver` includes `discount_amount` from the orders table. 
 
 The Gold layer is designed around three questions the case brief asks directly:
 
-1. **Which products are most profitable?** → We hope to find an answer in `product_revenue_gold`, butv in reality , we don't know - because we don't know the sell price fornthe products, the payment amount and order amount sometimes include more than 1 product, so we couldn't split the single product revenue out
+1. **Which products are most profitable?** → We hope to find an answer in `product_revenue_gold`, butv in reality , we don't know - because we don't know the sell price fornthe products, the payment amount and order amount sometimes include more than 1 product, so we couldn't split the single product revenue out. But if we add all the orders include product Froyen Salmon Filets up, the related orders revenue is the highest. So we infer that this is a key contributor to the revenue.
 2. **Which products are returned most often?** → `cancelled_product_gold` by assuming cancellation si return, we found out, cinnamon rasin bagels has the highest return rate - 33.3%!
 3. **How do sales vary across regions?** → we created `sales_region_gold` and `sales_country_gold`, you can see the table and the world map in .ipynb. In short, APAC and China is leading, a lot!
 
