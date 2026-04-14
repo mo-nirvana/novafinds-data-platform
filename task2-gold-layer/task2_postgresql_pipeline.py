@@ -180,6 +180,7 @@ SELECT
   COALESCE(SUM(os.total_amount), 0) as total_revenue
 FROM product_silver p
 LEFT JOIN order_silver os ON p.product_id = os.product_id
+WHERE o.order_status != 'cancelled'
 GROUP BY p.product_id, p.product_name, p.category_name, p.price;
 """
 if run_query(conn, sql_product_revenue):
