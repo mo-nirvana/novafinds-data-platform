@@ -650,6 +650,7 @@
 # MAGIC FROM LIVE.product_silver p
 # MAGIC JOIN LIVE.order_silver o
 # MAGIC   ON p.product_id = o.product_id
+# MAGIC WHERE o.order_status != 'cancelled'
 # MAGIC GROUP BY p.category_name, p.product_id, p.product_name, p.price
 
 # COMMAND ----------
