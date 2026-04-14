@@ -85,7 +85,7 @@ If unit tests fail, the pipeline does not run. If the pipeline fails, visualisat
 | Entity | Hard blocks (FAIL UPDATE) | Soft blocks (DROP ROW) |
 |---|---|---|
 | `payment_silver` | `payment_id IS NOT NULL`, `amount >= 0` | — |
-| `product_silver` | `product_id IS NOT NULL`, `price > 0` | — |
+| `product_silver` | `product_id IS NOT NULL`, `price > 0 & sell_price > 0` | — |
 | `order_silver` | `order_id IS NOT NULL`, `quantity > 0` | — |
 | `customer_silver` | — | `country IS NULL`, `active IS NULL` |
 
